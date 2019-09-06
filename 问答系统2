@@ -1,0 +1,145 @@
+import re
+from sklearn.metrics.pairwise import cosine_similarity
+from queue import PriorityQueue as PQueue
+import re
+import string
+from functools import reduce
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from nltk.stem.porter import PorterStemmer
+stop_words = set(stopwords.words('english'))
+pattern = re.compile('[{}]'.format(re.escape(string.punctuation)))
+stemmer = PorterStemmer()
+
+
+import json
+import time
+#读取文件
+def read_corpus(file_path):
+    """
+    读取给定的语料库，并把问题列表和答案列表分别写入到 qlist, alist 里面。 在此过程中，不用对字符换做任何的处理（这部分需要在 Part 2.3里处理）
+    qlist = ["问题1"， “问题2”， “问题3” ....]
+    alist = ["答案1", "答案2", "答案3" ....]
+    务必要让每一个问题和答案对应起来（下标位置一致）
+    """
+    qlist=[]
+    alist=[]
+    with open(file_path, 'r') as f:
+        json_data = json.loads(f.readline())
+        json_list = json_data["data"]
+        for data_dict in json_list:
+            for data_key in data_dict:
+                if "paragraphs" == data_key:
+                    paragraphs_list = data_dict.get(data_key)
+                    for content_dict in paragraphs_list:
+                        for qas_key in content_dict:
+                            if "qas" == qas_key:
+                                qas_list = content_dict.get(qas_key)
+                                for q_a_dict in qas_list:
+                                    if len(q_a_dict["answers"]) > 0:
+                                        qlist.append(q_a_dict["question"])
+                                        alist.append(q_a_dict["answers"][0]["text"])
+
+    assert len(qlist) == len(alist)  # 确保长度一样
+    return qlist, alist
+qlist, alist = read_corpus("train-v2.0.json")
+
+# 加载训练好的词向量
+def load_glove(path):
+    vocab = {}
+    embedding = []
+    vocab["UNK"] = 0
+    embedding.append([0] * 100)
+    with open(path, 'r', encoding='utf8') as f:
+        i = 1
+        for line in f:
+            row = line.strip().split()
+            vocab[row[0]] = i
+            embedding.append(row[1:])
+            i += 1
+
+    return vocab, embedding
+path = 'glove.6B.100d.txt'
+vocabs, emb = load_glove(path)
+
+# 词转化为词向量
+def word_to_vec(words, vocab, emb):
+    vec = []
+    for word in words:
+        if word in vocab:
+            idx = vocab[word]
+            vec.append(emb[idx])
+        else:
+            idx = 0
+            vec.append(emb[idx])
+    return vec
+
+# 倒排索引
+inverted_idx = {}  # 定一个一个简单的倒排表
+for i in range(len(qlist)):
+    for word in qlist[i].split():
+        if word in inverted_idx:
+            inverted_idx[word].append(i)
+        else:
+            inverted_idx[word] = [i]
+            
+            
+            
+# 求集合的交集
+def intersections(set1, set2):
+    return set1.intersection(set2)
+#返回最有可能的TOP 5问题    
+def top5results_emb(input_q):
+    """
+    给定用户输入的问题 input_q, 返回最有可能的TOP 5问题。这里面需要做到以下几点：
+    1. 利用倒排表来筛选 candidate
+    2. 对于用户的输入 input_q，转换成句子向量
+    3. 计算跟每个库里的问题之间的相似度
+    4. 找出相似度最高的top5问题的答案
+    
+    """
+    pattern = re.compile('[{}]'.format(re.escape(string.punctuation)))
+    sentence = pattern.sub("", input_q)
+    sentence = sentence.lower()
+    word_list = sentence.split()
+    result_list = []
+    for word in word_list:
+        if word not in stop_words:
+            word = "#number" if word.isdigit() else word
+            word = stemmer.stem(word)  # 将词变为原型
+            result_list.append(word)
+    # 输入问题的词向量
+    input_q_vec = word_to_vec(result_list, vocabs, emb)
+#     print(input_q_vec)
+    # 根据倒排表筛选出候选问题索引
+    candidates = []
+    for word in result_list:
+        if word in inverted_idx:
+            ids = inverted_idx[word]
+            candidates.append(set(ids))
+
+    candidate_idx = list(reduce(intersections, candidates))  # 候选问题索引
+    # 计算相似度得分
+    scores = []
+    for i in candidate_idx:
+        sentence = qlist[i].split()
+        vec = word_to_vec(sentence, vocabs, emb)
+        score = cosine_similarity(input_q_vec, vec)[0]
+        scores.append((i, score[0]))
+    scores_sorted = sorted(scores, key=lambda k:k[1], reverse=True)
+
+    # 根据索引检索top 5答案
+    answers = []
+    i = 0
+    for (idx,score) in scores_sorted:
+        if i < 5:
+            answer = alist[idx]
+            answers.append(answer)
+        i += 1
+    
+    return answers
+    
+    
+print(top5results_emb("what languge does the word of 'symbiosis' come from"))
+print(top5results_emb("In her music, what are some?"))
