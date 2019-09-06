@@ -1,0 +1,166 @@
+import re
+import string
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from nltk.stem.porter import PorterStemmer
+stop_words = set(stopwords.words('english'))
+pattern = re.compile('[{}]'.format(re.escape(string.punctuation)))
+stemmer = PorterStemmer()
+import json
+import time
+def read_corpus(file_path):
+    """
+    读取给定的语料库，并把问题列表和答案列表分别写入到 qlist, alist 里面。 在此过程中，不用对字符换做任何的处理（这部分需要在 Part 2.3里处理）
+    qlist = ["问题1"， “问题2”， “问题3” ....]
+    alist = ["答案1", "答案2", "答案3" ....]
+    务必要让每一个问题和答案对应起来（下标位置一致）
+    """
+    qlist=[]
+    alist=[]
+    with open(file_path, 'r') as f:
+        json_data = json.loads(f.readline())
+        json_list = json_data["data"]
+        for data_dict in json_list:
+            for data_key in data_dict:
+                if "paragraphs" == data_key:
+                    paragraphs_list = data_dict.get(data_key)
+                    for content_dict in paragraphs_list:
+                        for qas_key in content_dict:
+                            if "qas" == qas_key:
+                                qas_list = content_dict.get(qas_key)
+                                for q_a_dict in qas_list:
+                                    if len(q_a_dict["answers"]) > 0:
+                                        qlist.append(q_a_dict["question"])
+                                        alist.append(q_a_dict["answers"][0]["text"])
+                                   
+
+
+    assert len(qlist) == len(alist)  # 确保长度一样
+    return qlist, alist
+    
+    
+    
+  
+  
+  
+q_list, a_list = read_corpus("train-v2.0.json")  
+# 查看统计的词频最高的几个
+def statistic_words(temp_list=[]):
+    temp_dict = {}
+    for line in temp_list:
+        word_list = line.split(" ")
+        for word in word_list:
+            temp_dict[word] = temp_dict.get(word, 0) + 1
+    return temp_dict
+new_qlist = statistic_words(q_list)
+new_alist = statistic_words(a_list)
+
+
+new_qlistdict= dict(sorted(new_qlist.items(), key = lambda x:x[1], reverse = True))
+new_alistdict = dict(sorted(new_alist.items(), key = lambda x:x[1], reverse = True))
+print([i + ":" + str(new_qlistdict.get(i)) for i in new_qlistdict.keys()][:10])
+print([i + ":" + str(new_alistdict.get(i)) for i in new_alistdict.keys()][:10])
+    
+# 清洗数据，转换大小写，将词变为词根单元，去停用词
+def preprocessing(temp_list=[]):
+    word_list_list=[]
+    word_dict={}
+    for line in temp_list:
+        temp_word_list=[]
+        sentence=pattern.sub(" ",line).lower()  # 1.过滤一些无用字符
+        sentence=sentence.lower()
+        word_list=sentence.split()
+        for word in word_list:
+            if word not in stop_words:   # 3.过滤停用词
+                word = "#number" if word.isdigit() else word  # 4.数字特殊处理
+                word = stemmer.stem(word)                     # 5.词干提取（包括词形还原）
+                word_dict[word] = word_dict.get(word, 0) + 1
+                temp_word_list.append(word)
+        word_list_list.append(temp_word_list)
+    return word_dict,word_list_list
+
+# 筛选单词 可以选定特定的一些词频单词
+def filter_words(in_list=[], in_dict={}, lower=0, upper=0):
+    word_list = []
+    for key, val in in_dict.items():
+        if val >= lower and val <= upper:
+            word_list.append(key)
+            
+    new_list = []
+    for line in in_list:
+        words = [w for w in line if w in word_list]
+        new_list.append(' '.join(words))
+    return new_list
+    
+ #tfdif
+ 
+ 
+from sklearn.feature_extraction.text import TfidfVectorizer
+vectorizer =  TfidfVectorizer()   
+  # 定义一个tf-idf的vectorizer
+X = vectorizer.fit_transform(list(new_qlist))    # 结果存放在X矩阵
+
+
+# 计算稀疏度 如果X过大内存直接就爆炸了。
+x_mat = X.toarray()
+n = len(x_mat)
+m = len(x_mat[0])
+num=0
+for i in range(n):
+    for j in range(m):
+        if x_mat[i][j] != 0:
+            num += 1
+sparsity = num / (n*m)
+print (sparsity)  # 打印出稀疏度(sparsity)
+
+
+# 搜索相似可能性最大的几个
+from sklearn.metrics.pairwise import cosine_similarity
+from queue import PriorityQueue as PQueue
+import re
+def top5results(input_q):
+    """
+    给定用户输入的问题 input_q, 返回最有可能的TOP 5问题。这里面需要做到以下几点：
+    1. 对于用户的输入 input_q 首先做一系列的预处理，然后再转换成tf-idf向量（利用上面的vectorizer)
+    2. 计算跟每个库里的问题之间的相似度
+    3. 找出相似度最高的top5问题的答案
+    """
+    pattern = re.compile('[{}]'.format(re.escape(string.punctuation)))
+    sentence = pattern.sub("", input_q)
+    sentence = sentence.lower()
+    words = sentence.split()
+    word_list = []
+    for word in words:
+        if word not in stop_words:
+            word = "#number" if word.isdigit() else word
+            word = stemmer.stem(word)
+            word_list.append(word)
+
+#     top_idxs = []  # top_idxs存放相似度最高的（存在qlist里的）问题的下表 
+                   # hint: 利用priority queue来找出top results. 思考为什么可以这么做？ 
+     # 计算相似度
+    input_seg = ' '.join(word_list)
+    input_vec = vectorizer.transform([input_seg])
+    res = cosine_similarity(input_vec, X)[0]
+    
+    # 得到top5的索引
+    pq = PQueue()
+    for i,v in enumerate(res):
+        pq.put((1.0-v, i))
+    
+    top_idxs = []
+    for i in range(5):
+        top_idxs.append(pq.get()[1])
+
+    print(top_idxs)    # top_idxs存放相似度最高的（存在qlist里的）问题的下表 
+                       # hint: 利用priority queue来找出top results. 思考为什么可以这么做？
+                       # 因为优先级队列的第一个值可以是浮点数，所以用1.0-相似度，就可以转换为优先级
+    result = [alist[i] for i in top_idxs]
+    return result # 返回相似度最高的问题对应的答案，作为TOP5答案    
+    
+
+print (top5results("when did Beyonce start becoming popular?"))
+
+
+
